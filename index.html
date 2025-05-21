@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- Crucial for responsiveness -->
     <title>Hexagonal Chip Game</title>
     <style>
         body {
@@ -11,13 +11,23 @@
             flex-direction: column;
             align-items: center;
             margin: 0;
-            padding: 20px;
+            padding: 10px; /* Reduced padding for smaller screens */
             background-color: #f0f0f0;
+            overflow-x: hidden; /* Prevent horizontal scrollbar if SVG is slightly too wide during resize */
         }
         #game-container {
             position: relative;
+            width: 100%;
+            display: flex;
+            justify-content: center;
         }
         #game-grid {
+            /* Responsive SVG styling */
+            width: 95vw; /* Take up most of the viewport width */
+            max-width: 850px; /* Max size on larger screens */
+            height: auto; /* Maintain aspect ratio based on viewBox */
+            display: block; /* For margin auto to work */
+            margin: 0 auto; /* Center the SVG */
             background-color: #e0e0e0;
             border: 1px solid #ccc;
         }
@@ -31,20 +41,20 @@
             opacity: 0.9;
         }
         .chip-text {
-            font-size: 14px;
+            font-size: 14px; /* Will scale with SVG viewBox */
             font-weight: bold;
-            fill: black; /* Number color */
+            fill: black;
             text-anchor: middle;
             dominant-baseline: middle;
             pointer-events: none;
         }
         #instructions {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
             padding: 10px;
             background-color: white;
             border: 1px solid #ccc;
             border-radius: 5px;
-            max-width: 700px;
+            max-width: 90vw; /* Responsive width for instructions */
             text-align: center;
         }
         .svg-button rect {
@@ -57,7 +67,7 @@
             text-anchor: middle;
             dominant-baseline: middle;
             fill: #333;
-            font-size: 14px;
+            font-size: 14px; /* Will scale with SVG viewBox */
             pointer-events: none;
         }
         .svg-button.enabled rect {
@@ -79,6 +89,39 @@
             margin-top: 5px;
             color: #0056b3;
         }
+        /* Context Menu for Mobile/Click */
+        #context-menu {
+            display: none;
+            position: absolute; /* Positioned relative to #game-container */
+            background: white;
+            border: 1px solid #ccc;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.2);
+            padding: 5px;
+            z-index: 1000;
+            border-radius: 4px;
+            font-size: 0.9em;
+        }
+        #context-menu button {
+            display: block;
+            width: 100%;
+            margin-bottom: 3px;
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            background-color: #f0f0f0;
+            cursor: pointer;
+            text-align: left;
+        }
+        #context-menu button:last-child {
+            margin-bottom: 0;
+        }
+        #context-menu button:hover {
+            background-color: #e0e0e0;
+        }
+        #context-menu button:disabled {
+            color: #aaa;
+            background-color: #f9f9f9;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body>
@@ -92,13 +135,23 @@
     </div>
 
     <div id="game-container">
-        <svg id="game-grid" width="900" height="700"></svg>
+        <svg id="game-grid"></svg> <!-- Width/height removed, viewBox will be set by JS -->
+        <div id="context-menu">
+            <button id="ctxBtnAdd2">Add 2 Chips (A)</button>
+            <button id="ctxBtnRemove2">Remove 2 Chips (D)</button>
+            <button id="ctxBtnFire">Fire Chip (S)</button>
+        </div>
     </div>
 
     <script>
         const svgNS = "http://www.w3.org/2000/svg";
         const gameGridSvg = document.getElementById('game-grid');
         const phaseInstructionsDiv = document.getElementById('phase-instructions');
+        const contextMenu = document.getElementById('context-menu');
+        const ctxBtnAdd2 = document.getElementById('ctxBtnAdd2');
+        const ctxBtnRemove2 = document.getElementById('ctxBtnRemove2');
+        const ctxBtnFire = document.getElementById('ctxBtnFire');
+
 
         const HEX_SIZE = 30;
         const HEX_DRAWN_HEIGHT = 2 * HEX_SIZE;
@@ -118,9 +171,17 @@
         const C_X_OFFSET = SVG_BUTTON_MARGIN;
         const C_Y_OFFSET = SVG_BUTTON_HEIGHT + SVG_BUTTON_MARGIN * 2;
 
+        // Calculate design dimensions for viewBox
+        const DESIGN_WIDTH = C_X_OFFSET + (GRID_COLS * HORIZONTAL_COL_SEPARATION) + HORIZONTAL_ROW_OFFSET + (HEX_DRAWN_WIDTH/2) + C_X_OFFSET;
+        const DESIGN_HEIGHT = C_Y_OFFSET + (GRID_ROWS * VERTICAL_ROW_SEPARATION) + HEX_SIZE + C_Y_OFFSET/2 ; // Adjusted for better fit
+
+        gameGridSvg.setAttribute('viewBox', `0 0 ${DESIGN_WIDTH} ${DESIGN_HEIGHT}`);
+
+
         let chips = {};
         let gamePhase = 'setup';
-        let hoveredCell = null;
+        let hoveredCell = null; // For keyboard interaction
+        let activeCell = null; // For context menu interaction
 
         let history = [];
         let historyIndex = -1;
@@ -137,9 +198,7 @@
             return points.trim();
         }
 
-        function deepCloneChips(chipsObj) {
-            return JSON.parse(JSON.stringify(chipsObj));
-        }
+        function deepCloneChips(chipsObj) { return JSON.parse(JSON.stringify(chipsObj)); }
 
         function recordState() {
             if (historyIndex < history.length - 1) {
@@ -150,131 +209,62 @@
             updateHistoryButtons();
         }
 
-        function undo() {
-            if (historyIndex > 0) {
-                historyIndex--;
-                chips = deepCloneChips(history[historyIndex]);
-                drawGrid();
-            }
-        }
-
-        function redo() {
-            if (historyIndex < history.length - 1) {
-                historyIndex++;
-                chips = deepCloneChips(history[historyIndex]);
-                drawGrid();
-            }
-        }
+        function undo() { if (historyIndex > 0) { historyIndex--; chips = deepCloneChips(history[historyIndex]); drawGrid(); } }
+        function redo() { if (historyIndex < history.length - 1) { historyIndex++; chips = deepCloneChips(history[historyIndex]); drawGrid(); } }
 
         function updateHistoryButtons() {
             const btnBackSvg = document.getElementById('svgBtnBack');
             const btnForwardSvg = document.getElementById('svgBtnForward');
-            if (btnBackSvg) {
-                btnBackSvg.classList.remove('enabled', 'disabled');
-                btnBackSvg.classList.add(historyIndex <= 0 ? 'disabled' : 'enabled');
-            }
-            if (btnForwardSvg) {
-                btnForwardSvg.classList.remove('enabled', 'disabled');
-                btnForwardSvg.classList.add(historyIndex >= history.length - 1 ? 'disabled' : 'enabled');
-            }
+            if (btnBackSvg) { btnBackSvg.classList.remove('enabled', 'disabled'); btnBackSvg.classList.add(historyIndex <= 0 ? 'disabled' : 'enabled'); }
+            if (btnForwardSvg) { btnForwardSvg.classList.remove('enabled', 'disabled'); btnForwardSvg.classList.add(historyIndex >= history.length - 1 ? 'disabled' : 'enabled'); }
         }
 
         function updatePhaseInstructions() {
             if (gamePhase === 'setup') {
                 phaseInstructionsDiv.innerHTML = `<b>Setup Phase:</b> Click a hexagon to place/remove a single chip. Press "Start Game" when ready.`;
             } else {
-                phaseInstructionsDiv.innerHTML = `<b>Play Phase:</b> Hover over a hexagon. Press 'A' to Add 2, 'D' to Remove 2, 'S' to Fire.`;
+                phaseInstructionsDiv.innerHTML = `<b>Play Phase:</b> Hover & use A/S/D keys, or Click/Tap a hexagon for options.`;
             }
         }
 
-        function getChipCount(r, c) {
-            return chips[`${r},${c}`] || 0;
-        }
+        function getChipCount(r, c) { return chips[`${r},${c}`] || 0; }
+        function setChipCount(r, c, count) { if (count > 0) chips[`${r},${c}`] = count; else delete chips[`${r},${c}`]; }
+        function addChips(r, c, amount) { setChipCount(r, c, getChipCount(r, c) + amount); }
 
-        function setChipCount(r, c, count) {
-            if (count > 0) {
-                chips[`${r},${c}`] = count;
-            } else {
-                delete chips[`${r},${c}`];
-            }
-        }
-
-        function addChips(r, c, amount) {
-            setChipCount(r, c, getChipCount(r, c) + amount);
-        }
-
-        function performAdd2Chips(r, c) {
-            addChips(r, c, 2);
-            drawGrid();
-            recordState();
-        }
-
+        function performAdd2Chips(r, c) { addChips(r, c, 2); drawGrid(); recordState(); }
         function performRemove2Chips(r, c) {
             const currentChips = getChipCount(r, c);
-            if (currentChips >= 2) {
-                addChips(r, c, -2);
-            } else {
-                setChipCount(r, c, 0);
-            }
-            drawGrid();
-            recordState();
+            if (currentChips >= 2) addChips(r, c, -2); else setChipCount(r, c, 0);
+            drawGrid(); recordState();
         }
-
         function performFireChip(r, c) {
             if (getChipCount(r, c) < 1) return;
             addChips(r, c, -1);
-
-            let neighbors = [];
-            const targetRow = r - 1;
-
-            if (r % 2 === 0) {
-                neighbors.push({ r: targetRow, c: c - 1 });
-                neighbors.push({ r: targetRow, c: c });
-            } else {
-                neighbors.push({ r: targetRow, c: c });
-                neighbors.push({ r: targetRow, c: c + 1 });
-            }
-
-            neighbors.forEach(n => {
-                if (n.r >= 0 && n.r < GRID_ROWS && n.c >= 0 && n.c < GRID_COLS) {
-                     addChips(n.r, n.c, 1);
-                } else {
-                    addChips(n.r, n.c, 1);
-                }
-            });
-            drawGrid();
-            recordState();
+            let neighbors = []; const targetRow = r - 1;
+            if (r % 2 === 0) { neighbors.push({ r: targetRow, c: c - 1 }); neighbors.push({ r: targetRow, c: c }); }
+            else { neighbors.push({ r: targetRow, c: c }); neighbors.push({ r: targetRow, c: c + 1 }); }
+            neighbors.forEach(n => { addChips(n.r, n.c, 1); }); // Simplified neighbor check for infinite grid model
+            drawGrid(); recordState();
         }
 
         function createSvgElement(tag, attributes) {
             const el = document.createElementNS(svgNS, tag);
-            for (const attr in attributes) {
-                el.setAttribute(attr, attributes[attr]);
-            }
+            for (const attr in attributes) el.setAttribute(attr, attributes[attr]);
             return el;
         }
 
         function handlePhaseControlButtonClick() {
             const btnPhaseControlText = document.getElementById('svgBtnPhaseControlText');
             if (gamePhase === 'setup') {
-                gamePhase = 'play';
-                btnPhaseControlText.textContent = 'Reset Setup';
-                history = [deepCloneChips(chips)];
-                historyIndex = 0;
+                gamePhase = 'play'; btnPhaseControlText.textContent = 'Reset Setup';
+                history = [deepCloneChips(chips)]; historyIndex = 0;
             } else {
-                gamePhase = 'setup';
-                btnPhaseControlText.textContent = 'Start Game';
-                chips = {};
-                history = [deepCloneChips(chips)];
-                historyIndex = 0;
+                gamePhase = 'setup'; btnPhaseControlText.textContent = 'Start Game';
+                chips = {}; history = [deepCloneChips(chips)]; historyIndex = 0;
             }
-            if (hoveredCell && hoveredCell.element) {
-                hoveredCell.element.classList.remove('hovered-play');
-            }
-            hoveredCell = null;
-            updatePhaseInstructions();
-            updateHistoryButtons();
-            drawGrid();
+            if (hoveredCell && hoveredCell.element) hoveredCell.element.classList.remove('hovered-play');
+            hoveredCell = null; activeCell = null; contextMenu.style.display = 'none';
+            updatePhaseInstructions(); updateHistoryButtons(); drawGrid();
         }
 
         function drawSvgControls() {
@@ -282,24 +272,21 @@
             const btnBackGroup = createSvgElement('g', { id: 'svgBtnBack', class: 'svg-button' });
             btnBackGroup.appendChild(createSvgElement('rect', { x: SVG_BUTTON_MARGIN, y: buttonY, width: SVG_BUTTON_WIDTH, height: SVG_BUTTON_HEIGHT }));
             const btnBackText = createSvgElement('text', { x: SVG_BUTTON_MARGIN + SVG_BUTTON_WIDTH / 2, y: buttonY + SVG_BUTTON_HEIGHT / 2 });
-            btnBackText.textContent = 'Back (Undo)';
-            btnBackGroup.appendChild(btnBackText);
+            btnBackText.textContent = 'Back (Undo)'; btnBackGroup.appendChild(btnBackText);
             btnBackGroup.addEventListener('click', () => { if (btnBackGroup.classList.contains('enabled')) undo(); });
             gameGridSvg.appendChild(btnBackGroup);
 
             const btnForwardGroup = createSvgElement('g', { id: 'svgBtnForward', class: 'svg-button' });
             btnForwardGroup.appendChild(createSvgElement('rect', { x: SVG_BUTTON_MARGIN * 2 + SVG_BUTTON_WIDTH, y: buttonY, width: SVG_BUTTON_WIDTH, height: SVG_BUTTON_HEIGHT }));
             const btnForwardText = createSvgElement('text', { x: SVG_BUTTON_MARGIN * 2 + SVG_BUTTON_WIDTH + SVG_BUTTON_WIDTH / 2, y: buttonY + SVG_BUTTON_HEIGHT / 2 });
-            btnForwardText.textContent = 'Forward (Redo)';
-            btnForwardGroup.appendChild(btnForwardText);
+            btnForwardText.textContent = 'Forward (Redo)'; btnForwardGroup.appendChild(btnForwardText);
             btnForwardGroup.addEventListener('click', () => { if (btnForwardGroup.classList.contains('enabled')) redo(); });
             gameGridSvg.appendChild(btnForwardGroup);
 
             const btnPhaseControlGroup = createSvgElement('g', { id: 'svgBtnPhaseControl', class: 'svg-button enabled' });
             btnPhaseControlGroup.appendChild(createSvgElement('rect', { x: SVG_BUTTON_MARGIN * 3 + SVG_BUTTON_WIDTH * 2, y: buttonY, width: SVG_BUTTON_WIDTH + 30, height: SVG_BUTTON_HEIGHT }));
             const btnPhaseControlText = createSvgElement('text', { id: 'svgBtnPhaseControlText', x: SVG_BUTTON_MARGIN * 3 + SVG_BUTTON_WIDTH * 2 + (SVG_BUTTON_WIDTH + 30) / 2, y: buttonY + SVG_BUTTON_HEIGHT / 2 });
-            btnPhaseControlText.textContent = gamePhase === 'setup' ? 'Start Game' : 'Reset Setup';
-            btnPhaseControlGroup.appendChild(btnPhaseControlText);
+            btnPhaseControlText.textContent = gamePhase === 'setup' ? 'Start Game' : 'Reset Setup'; btnPhaseControlGroup.appendChild(btnPhaseControlText);
             btnPhaseControlGroup.addEventListener('click', handlePhaseControlButtonClick);
             gameGridSvg.appendChild(btnPhaseControlGroup);
         }
@@ -308,20 +295,14 @@
             gameGridSvg.innerHTML = '';
             drawSvgControls();
 
-            for (let r = 0; r < GRID_ROWS; r++) {
-                for (let c = 0; c < GRID_COLS; c++) {
-                    const cx = C_X_OFFSET + (HEX_DRAWN_WIDTH / 2) + c * HORIZONTAL_COL_SEPARATION + (r % 2 === 1 ? HORIZONTAL_ROW_OFFSET : 0);
-                    const cy = C_Y_OFFSET + HEX_SIZE + r * VERTICAL_ROW_SEPARATION;
+            for (let r_idx = 0; r_idx < GRID_ROWS; r_idx++) { // Changed loop var name to avoid conflict
+                for (let c_idx = 0; c_idx < GRID_COLS; c_idx++) { // Changed loop var name
+                    const cx = C_X_OFFSET + (HEX_DRAWN_WIDTH / 2) + c_idx * HORIZONTAL_COL_SEPARATION + (r_idx % 2 === 1 ? HORIZONTAL_ROW_OFFSET : 0);
+                    const cy = C_Y_OFFSET + HEX_SIZE + r_idx * VERTICAL_ROW_SEPARATION;
 
                     const points = getHexagonPoints(cx, cy, HEX_SIZE);
-                    const hex = createSvgElement('polygon', {
-                        points: points,
-                        fill: 'white',
-                        stroke: '#222',
-                        'stroke-width': 1,
-                        class: 'hex-cell'
-                    });
-                    hex.dataset.r = r; hex.dataset.c = c;
+                    const hex = createSvgElement('polygon', { points, fill: 'white', stroke: '#222', 'stroke-width': 1, class: 'hex-cell' });
+                    hex.dataset.r = r_idx; hex.dataset.c = c_idx;
 
                     hex.addEventListener('mouseover', () => {
                         if (gamePhase === 'play') {
@@ -332,68 +313,94 @@
                     hex.addEventListener('mouseout', () => {
                         if (gamePhase === 'play') {
                             hex.classList.remove('hovered-play');
-                            if (hoveredCell && hoveredCell.element === hex) {
-                                hoveredCell = null;
-                            }
+                            if (hoveredCell && hoveredCell.element === hex) hoveredCell = null;
                         }
                     });
 
-                    hex.addEventListener('click', () => {
+                    hex.addEventListener('click', (event) => {
                         const clickedR = parseInt(hex.dataset.r);
                         const clickedC = parseInt(hex.dataset.c);
                         if (gamePhase === 'setup') {
-                            if (getChipCount(clickedR, clickedC) > 0) {
-                                setChipCount(clickedR, clickedC, 0);
-                            } else {
-                                setChipCount(clickedR, clickedC, 1);
+                            if (getChipCount(clickedR, clickedC) > 0) setChipCount(clickedR, clickedC, 0);
+                            else setChipCount(clickedR, clickedC, 1);
+                            drawGrid(); recordState();
+                        } else { // gamePhase === 'play' - Open context menu
+                            activeCell = { r: clickedR, c: clickedC };
+                            const svgRect = gameGridSvg.getBoundingClientRect();
+
+                            // Position context menu relative to the SVG, then translate to page coordinates
+                            // Convert click coordinates to be relative to the #game-container
+                            const containerRect = gameGridSvg.parentElement.getBoundingClientRect();
+                            let xPos = event.clientX - containerRect.left + window.scrollX + 10;
+                            let yPos = event.clientY - containerRect.top + window.scrollY + 10;
+
+                            // Prevent menu from going off-screen (simple boundary check)
+                            const menuWidth = contextMenu.offsetWidth || 150; // Estimate if not yet displayed
+                            const menuHeight = contextMenu.offsetHeight || 100;
+                            if (xPos + menuWidth > window.innerWidth) {
+                                xPos -= (menuWidth + 20);
                             }
-                            drawGrid();
-                            recordState();
+                            if (yPos + menuHeight > window.innerHeight) {
+                                yPos -= (menuHeight + 20);
+                            }
+
+
+                            contextMenu.style.left = `${xPos}px`;
+                            contextMenu.style.top = `${yPos}px`;
+                            contextMenu.style.display = 'block';
+
+                            ctxBtnFire.disabled = getChipCount(clickedR, clickedC) < 1;
+                            ctxBtnRemove2.disabled = getChipCount(clickedR, clickedC) < 2;
+                            ctxBtnAdd2.disabled = false; // Always enabled
                         }
                     });
                     gameGridSvg.appendChild(hex);
 
-                    const chipCount = getChipCount(r, c);
+                    const chipCount = getChipCount(r_idx, c_idx);
                     if (chipCount > 0) {
-                        const chipVisual = createSvgElement('circle', {
-                            cx: cx, cy: cy,
-                            r: HEX_SIZE * 0.5,
-                            fill: 'skyblue', // MODIFIED: Chip color to aliceblue (very light blue)
-                            stroke: 'none',     // MODIFIED: No outline for the chip
-                            'stroke-width': 0,  // Ensure no stroke width
-                            'pointer-events': 'none'
-                        });
+                        const chipVisual = createSvgElement('circle', { cx, cy, r: HEX_SIZE * 0.5, fill: 'skyblue', stroke: 'none', 'stroke-width': 0, 'pointer-events': 'none' });
                         gameGridSvg.appendChild(chipVisual);
                         const text = createSvgElement('text', { x: cx, y: cy, class: 'chip-text' });
-                        text.textContent = chipCount;
-                        gameGridSvg.appendChild(text);
+                        text.textContent = chipCount; gameGridSvg.appendChild(text);
                     }
                 }
             }
-            updateHistoryButtons();
-            updatePhaseInstructions();
+            updateHistoryButtons(); updatePhaseInstructions();
         }
 
+        // Context Menu Button Listeners
+        ctxBtnAdd2.addEventListener('click', () => { if (activeCell) performAdd2Chips(activeCell.r, activeCell.c); contextMenu.style.display = 'none'; });
+        ctxBtnRemove2.addEventListener('click', () => { if (activeCell) performRemove2Chips(activeCell.r, activeCell.c); contextMenu.style.display = 'none'; });
+        ctxBtnFire.addEventListener('click', () => { if (activeCell) performFireChip(activeCell.r, activeCell.c); contextMenu.style.display = 'none'; });
+
+        // Global Keydown Listener
         document.addEventListener('keydown', (event) => {
-            if (gamePhase !== 'play' || !hoveredCell) return;
+            if (gamePhase !== 'play' || !hoveredCell) return; // Only for keyboard on desktop
+            if (contextMenu.style.display === 'block') return; // Don't process keys if context menu is open
+
             let actionTaken = false;
-            const r = hoveredCell.r; const c = hoveredCell.c;
+            const r_key = hoveredCell.r; const c_key = hoveredCell.c; // Use different var names
             switch (event.key.toLowerCase()) {
-                case 'a': performAdd2Chips(r, c); actionTaken = true; break;
-                case 'd': if (getChipCount(r, c) >= 2) performRemove2Chips(r, c); actionTaken = true; break;
-                case 's': if (getChipCount(r, c) >= 1) performFireChip(r, c); actionTaken = true; break;
+                case 'a': performAdd2Chips(r_key, c_key); actionTaken = true; break;
+                case 'd': if (getChipCount(r_key, c_key) >= 2) performRemove2Chips(r_key, c_key); actionTaken = true; break;
+                case 's': if (getChipCount(r_key, c_key) >= 1) performFireChip(r_key, c_key); actionTaken = true; break;
             }
             if (actionTaken) event.preventDefault();
         });
 
+        // Hide context menu on outside click
+        document.addEventListener('click', (event) => {
+            if (!contextMenu.contains(event.target) && event.target.closest('.hex-cell') === null && event.target.closest('.svg-button') === null) {
+                contextMenu.style.display = 'none';
+                activeCell = null;
+            }
+        });
+
+
         function initializeBoard() {
-            chips = {};
-            gamePhase = 'setup';
-            hoveredCell = null;
-            history = [];
-            historyIndex = -1;
-            recordState();
-            drawGrid();
+            chips = {}; gamePhase = 'setup'; hoveredCell = null; activeCell = null;
+            history = []; historyIndex = -1;
+            recordState(); drawGrid();
         }
 
         initializeBoard();
